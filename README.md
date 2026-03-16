@@ -1,7 +1,7 @@
 # ARCStage
 Stan Weinstein Stage Analysis indicator for TradingView
 # ARCStage — Stan Weinstein Stage Analysis
-### by [Artha Research Capital (ARC)](https://github.com/ArthaResearchCapital)
+### by [Artha Research Capital (ARC)](https://github.com/himaghnamedhi)
 
 A Pine Script v5 indicator for TradingView that algorithmically detects and color-codes Stan Weinstein's four market cycle stages, with built-in contraction zone detection and breakout/breakdown signals.
 
