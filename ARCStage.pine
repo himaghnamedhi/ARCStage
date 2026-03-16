@@ -1,0 +1,277 @@
+// ============================================================
+// ARCStage — Stan Weinstein Stage Analysis
+// Author: Artha Research Capital (ARC) | github.com/ArthaResearchCapital
+// Description: Identifies and color-codes the four stages of
+//              Stan Weinstein's Stage Analysis on any timeframe.
+//              Designed primarily for Weekly charts.
+// ============================================================
+
+//@version=5
+indicator(title="Stan Weinstein Stage Analysis", shorttitle="SW Stage", overlay=true, max_lines_count=50, max_labels_count=10)
+
+// ============================================================
+// ── SECTION 1: USER INPUTS
+// ============================================================
+
+// SMA length — Weinstein uses 30-week SMA (≈ 150 days on daily)
+smaLen = input.int(30, title="SMA Length (weeks)", minval=5, maxval=200, group="Core Settings")
+
+// Contraction detection window
+contractionLen = input.int(15, title="Contraction Window (bars)", minval=5, maxval=50, group="Contraction Settings")
+
+// Threshold to declare a "strong" Stage 2 (price well above SMA)
+strongStage2Pct = input.float(8.0, title="Strong Stage 2 Threshold (%)", minval=1.0, maxval=30.0, step=0.5, group="Core Settings")
+
+// Slope lookback to determine if SMA is rising/falling/flat
+slopeLookback = input.int(4, title="SMA Slope Lookback (bars)", minval=1, maxval=20, group="Core Settings")
+
+// Toggles
+showBgColor    = input.bool(true,  title="Show Background Colors",     group="Display")
+showContLines  = input.bool(true,  title="Show Contraction Lines",     group="Display")
+showStageLbl   = input.bool(true,  title="Show Stage Label (Watermark)", group="Display")
+showSMA        = input.bool(true,  title="Show 30W SMA Line",          group="Display")
+
+// ============================================================
+// ── SECTION 2: 30-WEEK SMA CALCULATION
+// ============================================================
+
+// The 30W SMA is the spine of Weinstein's method.
+// On a weekly chart with smaLen=30, this is literally the 30-week SMA.
+sma30 = ta.sma(close, smaLen)
+
+// Plot SMA — visible, bold line
+plot(showSMA ? sma30 : na, title="30W SMA", color=color.new(color.orange, 0), linewidth=2)
+
+// ============================================================
+// ── SECTION 3: SMA SLOPE DETECTION
+// ============================================================
+
+// Calculate slope as the change in SMA over the lookback period.
+// We normalize by the SMA value to get a percentage slope.
+smaSlope = (sma30 - sma30[slopeLookback]) / sma30[slopeLookback] * 100
+
+// Thresholds for "rising", "flat", "falling"
+slopeRisingThresh  =  0.5   // SMA gaining more than 0.5% over lookback → uptrend
+slopeFallingThresh = -0.5   // SMA losing more than 0.5% over lookback → downtrend
+// Between -0.5% and +0.5% → flat (Stage 1 or Stage 3)
+
+isSlopeRising  = smaSlope >  slopeRisingThresh
+isSlopeFalling = smaSlope <  slopeFallingThresh
+isSlopeFlat    = not isSlopeRising and not isSlopeFalling
+
+// ============================================================
+// ── SECTION 4: PRICE POSITION RELATIVE TO SMA
+// ============================================================
+
+priceAboveSMA = close > sma30
+priceBelowSMA = close < sma30
+
+// How far (%) is price from SMA?
+distFromSMA = (close - sma30) / sma30 * 100
+
+// ============================================================
+// ── SECTION 5: STAGE CLASSIFICATION
+// ============================================================
+
+// ── Stage 2: Price above SMA, SMA rising
+isStage2 = priceAboveSMA and isSlopeRising
+
+// ── Strong Stage 2: Same as Stage 2 but price well extended above SMA
+isStage2Strong = isStage2 and distFromSMA > strongStage2Pct
+
+// ── Stage 4: Price below SMA, SMA falling
+isStage4 = priceBelowSMA and isSlopeFalling
+
+// ── Stage 1 (Basing): Price near SMA, SMA flat, no clear up/downtrend
+//    Often after Stage 4. Price moves sideways forming a base.
+isStage1 = isSlopeFlat and math.abs(distFromSMA) < 10.0
+
+// ── Stage 3 (Topping): After a Stage 2 advance, SMA flattens while
+//    price oscillates around it. Price may dip below then recover.
+//    We detect it as: flat SMA, but price was recently in Stage 2.
+//    Heuristic: SMA flat AND price is within 10% band of SMA
+//    AND recent history had a significant rally (price well above SMA earlier)
+recentHighAboveSMA = ta.highest(close, 20) > sma30 * 1.08
+isStage3 = isSlopeFlat and recentHighAboveSMA and math.abs(distFromSMA) < 10.0 and not isStage1
+
+// Refine Stage 1 to avoid overlap with Stage 3:
+// Stage 1 is after a downtrend (price was recently below SMA)
+recentLowBelowSMA = ta.lowest(close, 20) < sma30 * 0.95
+isStage1 := isSlopeFlat and recentLowBelowSMA and math.abs(distFromSMA) < 12.0
+
+// ============================================================
+// ── SECTION 6: BACKGROUND COLOR CODING
+// ============================================================
+
+// Stage 1 — Gray (Basing / Accumulation)
+bgStage1 = color.new(color.gray,   75)
+
+// Stage 2 — Green (Advancing)
+bgStage2 = color.new(color.green,  75)
+
+// Stage 2 Strong — Dark Green (Strong Advance, extended)
+bgStage2S = color.new(#006400,     65)  // dark green
+
+// Stage 3 — Orange (Topping / Distribution)
+bgStage3 = color.new(color.orange, 70)
+
+// Stage 4 — Red (Declining)
+bgStage4 = color.new(color.red,    75)
+
+// Select background color based on stage
+bgColor = isStage4     ? bgStage4  :
+          isStage2Strong ? bgStage2S :
+          isStage2     ? bgStage2  :
+          isStage3     ? bgStage3  :
+          isStage1     ? bgStage1  :
+          na
+
+bgcolor(showBgColor ? bgColor : na, title="Stage Background")
+
+// ============================================================
+// ── SECTION 7: STAGE LABEL (WATERMARK ON LAST BAR)
+// ============================================================
+
+// Build a stage string for the label
+stageStr = isStage4      ? "● Stage 4 — Declining"  :
+           isStage2Strong ? "● Stage 2 — Strong Advance" :
+           isStage2      ? "● Stage 2 — Advancing"  :
+           isStage3      ? "● Stage 3 — Topping"    :
+           isStage1      ? "● Stage 1 — Basing"     :
+           "● Stage — Undefined"
+
+// Label color matching stage
+lblColor = isStage4      ? color.red     :
+           isStage2Strong ? color.new(#006400, 0) :
+           isStage2      ? color.green   :
+           isStage3      ? color.orange  :
+           isStage1      ? color.gray    :
+           color.white
+
+// Only draw label on the most recent bar to act as a dynamic watermark
+if showStageLbl and barstate.islast
+    label.new(
+      x         = bar_index,
+      y         = high * 1.01,
+      text      = stageStr,
+      color     = lblColor,
+      textcolor = color.white,
+      style     = label.style_label_left,
+      size      = size.normal,
+      tooltip   = "Stan Weinstein Stage Analysis\nSMA Slope: " + str.tostring(smaSlope, "#.##") + "%\nDist from SMA: " + str.tostring(distFromSMA, "#.##") + "%"
+    )
+
+// ============================================================
+// ── SECTION 8: CONTRACTION ZONE DETECTION
+// ============================================================
+// A contraction zone is where the price range (high - low) is
+// narrowing over recent bars — indicating compression before
+// a potential breakout or breakdown.
+//
+// We detect it by comparing the current N-bar range to the
+// prior N-bar range. If current range < prior range by a
+// meaningful margin, we flag it as a contraction.
+
+// Rolling highest high and lowest low over the contraction window
+rollingHigh = ta.highest(high, contractionLen)
+rollingLow  = ta.lowest(low,   contractionLen)
+rollingRange = rollingHigh - rollingLow
+
+// Compare to prior window range
+priorHigh  = ta.highest(high, contractionLen)[contractionLen]
+priorLow   = ta.lowest(low,   contractionLen)[contractionLen]
+priorRange = priorHigh - priorLow
+
+// Contraction detected if current range is tighter than prior range by >15%
+isContracting = rollingRange < priorRange * 0.85
+
+// ── Draw blue dotted horizontal lines during contraction zones
+// We use a line from current bar back contractionLen bars
+
+// Upper resistance line (at rolling high of contraction window)
+var line contractionHigh = na
+var line contractionLow  = na
+
+if showContLines
+    if isContracting
+        // Delete previous lines and redraw dynamically
+        line.delete(contractionHigh)
+        line.delete(contractionLow)
+
+        contractionHigh := line.new(
+          x1    = bar_index - contractionLen,
+          y1    = rollingHigh,
+          x2    = bar_index,
+          y2    = rollingHigh,
+          color = color.new(color.blue, 10),
+          width = 1,
+          style = line.style_dotted
+        )
+
+        contractionLow := line.new(
+          x1    = bar_index - contractionLen,
+          y1    = rollingLow,
+          x2    = bar_index,
+          y2    = rollingLow,
+          color = color.new(color.blue, 10),
+          width = 1,
+          style = line.style_dotted
+        )
+
+// ============================================================
+// ── SECTION 9: OPTIONAL — CONTRACTION ZONE SHADING
+// ============================================================
+// Subtle blue tint on contracting bars
+contractionBg = color.new(color.blue, 90)
+bgcolor(showContLines and isContracting ? contractionBg : na, title="Contraction Zone")
+
+// ============================================================
+// ── SECTION 10: ADDITIONAL PLOTS & INFO TABLE
+// ============================================================
+
+// Plot a small triangle marker when price breaks above contraction zone
+// (potential Stage 2 breakout signal)
+contractionBreakout = isContracting[1] and not isContracting and close > rollingHigh[1] and isStage2
+plotshape(
+  contractionBreakout,
+  title     = "Breakout from Contraction",
+  style     = shape.triangleup,
+  location  = location.belowbar,
+  color     = color.lime,
+  size      = size.small,
+  text      = "BO"
+)
+
+// Plot a small triangle marker for Stage 4 breakdown from contraction
+contractionBreakdown = isContracting[1] and not isContracting and close < rollingLow[1] and isStage4
+plotshape(
+  contractionBreakdown,
+  title     = "Breakdown from Contraction",
+  style     = shape.triangledown,
+  location  = location.abovebar,
+  color     = color.red,
+  size      = size.small,
+  text      = "BD"
+)
+
+// ── Info Table (bottom-right corner) — shows current metrics
+var table infoTable = table.new(position.bottom_right, 2, 5, bgcolor=color.new(color.black, 60), border_color=color.new(color.white, 50), border_width=1)
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "Metric",        text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 1, 0, "Value",          text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 0, 1, "Current Stage",  text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, stageStr,         text_color=lblColor,    text_size=size.small)
+    table.cell(infoTable, 0, 2, "30W SMA",        text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(math.round(sma30, 2)), text_color=color.orange, text_size=size.small)
+    table.cell(infoTable, 0, 3, "SMA Slope %",    text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, str.tostring(smaSlope, "#.##") + "%", text_color=isSlopeRising ? color.green : isSlopeFalling ? color.red : color.gray, text_size=size.small)
+    table.cell(infoTable, 0, 4, "Dist from SMA",  text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(distFromSMA, "#.##") + "%", text_color=distFromSMA > 0 ? color.green : color.red, text_size=size.small)
+
+// ============================================================
+// ── END OF SCRIPT
+// ── NOTE: For most accurate Stage detection, use Weekly chart
+//    with SMA Length = 30. On Daily charts, consider using
+//    SMA Length = 150 (approx. 30 weeks × 5 trading days).
+// ============================================================
